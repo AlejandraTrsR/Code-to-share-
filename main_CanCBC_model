@@ -1,0 +1,134 @@
+%% Estimation of Canopy CBC from AVIRIS Hyperspectral Data
+
+% This script performs PLSR modeling using AVIRIS reflectance data to estimate canopy CBC.
+% Logical flow: Data loading → outlier removal → normalization → PLSR → VIP → reduced PLSR → comparison.
+% Modularity: Uses plsLOOCV and vipBandSelection, making the script maintainable.
+
+
+% Ensure that the variables Rmes1 (reflectance), CanCBC_mes (target), and R (wavelengths) are loaded in the workspace.
+
+% --- Input Data ---
+X = Rmes1';               % Reflectance matrix: [samples x spectral bands], expected size: 41 x 262
+Y = CanCBC_mes;           % Response vector: [41 x 1], measured canopy CBC values
+R = round(R);             % Round wavelength values to nearest integer if needed
+
+assert(size(X,1) == length(Y), 'X and Y must have the same number of samples');
+assert(size(X,2) == length(R), 'X columns must match the length of R (wavelengths)');
+
+%% step 1 -->  Identify& removed outliers using Z-score method
+
+z_scores_X = abs(zscore(X, 0, 1));      % z-scores for each band (column-wise)
+row_outliers = any(z_scores_X > 2, 2);  % flag rows with any band as outlier
+
+% Remove outlier rows
+X_cleaned = X(~row_outliers, :);
+Y_cleaned = Y(~row_outliers);
+
+% Display number of samples removed
+fprintf('Number of outlier samples removed: %d\n', sum(row_outliers));
+
+% Visualize original data and outliers
+figure;
+subplot(1,2,1);
+imagesc(X); colorbar;
+xlabel('Bands (Wavelength)');
+ylabel('Samples');
+title('Original Reflectance Data');
+set(gca, 'FontSize', 12);
+
+subplot(1,2,2);
+imagesc(z_scores_X); colorbar;
+xlabel('Bands');
+ylabel('Samples');
+title('Z-scores of Reflectance Data');
+set(gca, 'FontSize', 12);
+
+%% step 1.5  --> Normalize cleaned data using z-score normalization
+X_norm = normalize(X_cleaned, 'zscore');  % zero mean and unit variance
+
+% Optional: Visualize normalized data
+figure;
+imagesc(X_norm); colorbar;
+xlabel('Bands');
+ylabel('Samples');
+title('Normalized Reflectance Data');
+set(gca, 'FontSize', 12);
+
+%% step 2 --> Determining optimal components with PLSR and LOOCV:
+
+% Perform PLSR with Leave-One-Out Cross-Validation (LOOCV) to determine the optimal number of componentsto consider
+maxComponents = 20;% Usually the max is set to 20acording to literature with similar context.
+[beta_optimal, optimalComponents, R2, RMSE, mseLOO, Y_pred] = plsLOOCV(X_norm, Y_cleaned, maxComponents);
+
+fprintf('Optimal number of components: %d\n', optimalComponents);
+fprintf('R2: %.4f\n', R2);
+fprintf('RMSE: %.4f\n', RMSE);
+
+% Plot 1 - MSE vs Number of Components
+figure;
+plot(1:maxComponents, mseLOO, '-o');
+xlabel('Number of Components'); ylabel('MSE');
+title('MSE vs Number of Components (LOOCV)');
+grid on;
+
+% Plot 2 - Cumulative Variance Explained
+[~,~,~,~,~,PCTVAR] = plsregress(X_norm, Y_cleaned, optimalComponents);
+cumVar = cumsum(100 * PCTVAR(2,1:optimalComponents));  % just to be safe
+figure;
+plot(1:optimalComponents, cumVar, '-o');
+xlabel('Number of Components');
+ylabel('Cumulative Variance Explained (%)');
+title('Variance Explained by Optimal PLS Components');
+grid on;
+
+% Plot 3 - Actual vs Predicted Y
+figure;
+scatter(Y_cleaned, Y_pred, 'filled'); hold on;
+p = polyfit(Y_cleaned, Y_pred, 1); yfit = polyval(p, Y_cleaned);
+plot(Y_cleaned, yfit, '-r', 'LineWidth', 2);
+xlabel('Actual Y'); ylabel('Predicted Y');
+title(sprintf('Prediction Accuracy\nR^2 = %.4f, RMSE = %.4f', R2, RMSE));
+refline(1, 0);
+legend('Data', 'Fit Line'); grid on;
+set(gca, 'FontSize', 12); hold off;
+
+%% Step 3 --> Apply VIP-based band selection
+[VIP, selectedBands, X_subsetVIP] = vipBandSelection(X_norm, Y_cleaned, optimalComponents, R);
+
+% VIP-based band selection identifies the most informative spectral bands (VIP > 1)
+% based on their contribution to explaining variance in both X and Y after PLSR.
+
+fprintf('Selected %d bands with VIP > 1\n', length(selectedBands));
+disp('Selected band indices:');
+disp(selectedBands);
+
+%% STEP 4 --> Run a new PLSR on only VIP-selected bands using LOOCV
+
+[beta_VIP, optComp_VIP, R2_VIP, RMSE_VIP, mseLOO_VIP, Y_pred_VIP] = ...
+    plsLOOCV(X_subsetVIP, Y_cleaned, 20);
+
+
+% NOTE:MATLAB allows you to assign the outputs of a function to any variable names you want, 
+% as long as the number and order of outputs match the function definition.
+
+% Display performance
+fprintf('Optimal components (VIP bands): %d\n', optComp_VIP);
+fprintf('R² (VIP model): %.4f\n', R2_VIP);
+fprintf('RMSE (VIP model): %.4f\n', RMSE_VIP);
+
+
+%%  Step 5: Compare Models
+% Evaluate whether using VIP-selected bands:
+% - Improves prediction (higher R², lower RMSE)
+% - Reduces dimensionality with similar accuracy
+% - Enhances interpretability for CanCBC by using fewer bands
+
+fprintf('\n--- Model Comparison ---\n'); 
+fprintf('Full Model: R² = %.4f, RMSE = %.4f\n', R2, RMSE);
+fprintf('VIP Model : R² = %.4f, RMSE = %.4f\n', R2_VIP, RMSE_VIP);
+fprintf('Selected Bands: %d out of %d (%.1f%% reduction)\n', ...
+    length(selectedBands), size(X_norm, 2), ...
+    100 * length(selectedBands) / size(X_norm, 2));
+
+save('CanCBC_PLSR_results.mat', 'R2', 'RMSE', 'R2_VIP', 'RMSE_VIP', 'selectedBands', 'beta_optimal', 'beta_VIP');
+
