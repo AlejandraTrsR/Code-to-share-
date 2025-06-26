@@ -1,4 +1,4 @@
-# Canopy CBC Estimation using PLSR and AVIRIS Hyperspectral Data
+# Canopy CBC Estimation & Mapping using PLSR and AVIRIS Hyperspectral Data
 
 This MATLAB project implements a full pipeline to estimate canopy Carbon-Based Compounds (CanCBC) from AVIRIS hyperspectral reflectance data using Partial Least Squares Regression (PLSR) and VIP-based band selection. The goal is to build accurate, interpretable models for vegetation biochemical traits.
 
